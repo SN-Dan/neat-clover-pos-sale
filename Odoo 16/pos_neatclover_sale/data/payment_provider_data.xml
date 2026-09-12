@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+
+    <record id="payment_provider_neatcloverpos" model="payment.provider">
+        <field name="code">neatcloverpos</field>
+        <field name="name">Clover Sales POS</field>
+        <field name="state">test</field>
+        <field name="is_published">False</field>
+        <field name="image_128" type="base64"
+            file="pos_neatclover_sale/static/description/icon.png"/>
+        <field name="module_id" ref="base.module_pos_neatclover_sale"/>
+    </record>
+
+</odoo>

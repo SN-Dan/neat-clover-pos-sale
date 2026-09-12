@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="clover_terminal_payment_wizard_view_form" model="ir.ui.view">
+        <field name="name">clover.terminal.payment.wizard.form</field>
+        <field name="model">clover.terminal.payment.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Pay by Clover Terminal">
+                <group attrs="{'invisible': [('state', '!=', 'draft')]}">
+                    <field name="sale_order_id" invisible="1"/>
+                    <field name="invoice_id" invisible="1"/>
+                    <field name="order_id" invisible="1"/>
+                    <field name="currency_id" invisible="1"/>
+                    <field name="state" invisible="1"/>
+                    <field name="transaction_id" invisible="1"/>
+                    <field name="payment_method_locked" invisible="1"/>
+                    <field name="payment_method_id" attrs="{'readonly': [('payment_method_locked', '=', True)]}"/>
+                    <field name="amount_total"/>
+                    <field name="amount"/>
+                </group>
+                <div attrs="{'invisible': [('state', '!=', 'processing')]}" class="clover-terminal-processing">
+                    <field name="payment_page_html" readonly="1" nolabel="1" widget="html"/>
+                </div>
+                <group attrs="{'invisible': [('state', '!=', 'done')]}">
+                    <div class="alert alert-success mb-0" role="alert">
+                        Payment completed successfully. The quotation or invoice has been updated in Odoo.
+                    </div>
+                </group>
+                <footer>
+                    <button string="Pay" name="action_start_payment" type="object" class="btn-primary"
+                            attrs="{'invisible': [('state', '!=', 'draft')]}"/>
+                    <button string="Close" name="action_mark_done" type="object" class="btn-primary"
+                            attrs="{'invisible': [('state', '!=', 'done')]}"/>
+                    <button string="Cancel" special="cancel" class="btn-secondary"
+                            attrs="{'invisible': [('state', '!=', 'draft')]}"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="clover_terminal_refund_wizard_view_form" model="ir.ui.view">
+        <field name="name">clover.terminal.refund.wizard.form</field>
+        <field name="model">clover.terminal.refund.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Refund by Clover Terminal">
+                <group attrs="{'invisible': [('state', '!=', 'draft')]}">
+                    <field name="sale_order_id" invisible="1"/>
+                    <field name="invoice_id" invisible="1"/>
+                    <field name="order_id" invisible="1"/>
+                    <field name="currency_id" invisible="1"/>
+                    <field name="state" invisible="1"/>
+                    <field name="transaction_id" invisible="1"/>
+                    <field name="payment_method_locked" invisible="1"/>
+                    <field name="payment_method_id" attrs="{'readonly': [('payment_method_locked', '=', True)]}"/>
+                    <field name="amount_available"/>
+                    <field name="amount"/>
+                </group>
+                <div attrs="{'invisible': [('state', '!=', 'processing')]}" class="clover-terminal-processing">
+                    <field name="payment_page_html" readonly="1" nolabel="1" widget="html"/>
+                </div>
+                <group attrs="{'invisible': [('state', '!=', 'done')]}">
+                    <div class="alert alert-success mb-0" role="alert">
+                        Refund completed successfully. A note has been added to the quotation or invoice. A credit note for the refund has to be created manually.
+                    </div>
+                </group>
+                <footer>
+                    <button string="Refund" name="action_start_refund" type="object" class="btn-primary"
+                            attrs="{'invisible': [('state', '!=', 'draft')]}"/>
+                    <button string="Close" name="action_mark_done" type="object" class="btn-primary"
+                            attrs="{'invisible': [('state', '!=', 'done')]}"/>
+                    <button string="Cancel" special="cancel" class="btn-secondary"
+                            attrs="{'invisible': [('state', '!=', 'draft')]}"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+</odoo>

@@ -1,0 +1,50 @@
+.clover-terminal-processing {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+}
+
+.clover-terminal-processing .o_field_widget,
+.clover-terminal-processing .o_field_html,
+.clover-terminal-processing .o_wrap_field {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+.clover-terminal-iframe-wrap {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.clover-terminal-iframe,
+.clover-terminal-processing iframe,
+.clover-terminal-iframe-wrap iframe {
+    display: block;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0;
+    box-sizing: border-box;
+    border: 0;
+    min-height: 360px;
+}
+
+.modal-dialog.clover-terminal-dialog {
+    width: 520px;
+    max-width: calc(100vw - 1rem);
+}
+
+@media (max-width: 576px) {
+    .modal-dialog.clover-terminal-dialog {
+        width: calc(100vw - 1rem) !important;
+        max-width: calc(100vw - 1rem) !important;
+        margin: 0.5rem auto !important;
+    }
+
+    .clover-terminal-iframe,
+    .clover-terminal-processing iframe,
+    .clover-terminal-iframe-wrap iframe {
+        min-height: 280px;
+    }
+}
