@@ -13,9 +13,59 @@
                     <field name="currency_id" invisible="1"/>
                     <field name="state" invisible="1"/>
                     <field name="transaction_id" invisible="1"/>
+                    <field name="operation" invisible="1"/>
                     <field name="payment_method_locked" invisible="1"/>
                     <field name="payment_method_id" attrs="{'readonly': [('payment_method_locked', '=', True)]}"/>
                     <field name="amount_total"/>
+                    <field name="amount_preauth_available" invisible="1"/>
+                    <field name="amount"/>
+                    <field name="is_preauth"/>
+                    <field name="preauth_label" attrs="{'invisible': [('is_preauth', '=', False)], 'required': [('is_preauth', '=', True)]}"/>
+                    <field name="partner_id" invisible="1"/>
+                </group>
+                <div attrs="{'invisible': [('state', '!=', 'processing')]}" class="clover-terminal-processing">
+                    <field name="payment_page_html" readonly="1" nolabel="1" widget="html"/>
+                </div>
+                <group attrs="{'invisible': [('state', '!=', 'done')]}">
+                    <div class="alert alert-success mb-0" role="alert">
+                        Operation completed successfully. You may close this window.
+                    </div>
+                </group>
+                <footer>
+                    <button string="Confirm" name="action_confirm" type="object" class="btn-primary"
+                            attrs="{'invisible': [('state', '!=', 'draft')]}"/>
+                    <button string="Close" name="action_mark_done" type="object" class="btn-primary"
+                            attrs="{'invisible': [('state', '!=', 'done')]}"/>
+                    <button string="Cancel" special="cancel" class="btn-secondary"
+                            attrs="{'invisible': [('state', '!=', 'draft')]}"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="clover_terminal_charge_wizard_view_form" model="ir.ui.view">
+        <field name="name">clover.terminal.charge.wizard.form</field>
+        <field name="model">clover.terminal.charge.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Charge / Void Pre-Authorization">
+                <group attrs="{'invisible': [('state', '!=', 'draft')]}">
+                    <field name="sale_order_id" invisible="1"/>
+                    <field name="invoice_id" invisible="1"/>
+                    <field name="order_id" invisible="1"/>
+                    <field name="partner_id" invisible="1"/>
+                    <field name="currency_id" invisible="1"/>
+                    <field name="state" invisible="1"/>
+                    <field name="transaction_id" invisible="1"/>
+                    <field name="operation" invisible="1"/>
+                    <field name="payment_method_locked" invisible="1"/>
+                    <field name="preauth_request_id"
+                              domain="[('partner_id', '=', partner_id), ('request_type', '=', 'preauth'), ('status', 'in', ['authorized', 'processed_authorized'])]"
+                              context="{'tree_view_ref': 'pos_neatclover.view_neat_clover_payment_request_tree', 'list_view_ref': 'pos_neatclover.view_neat_clover_payment_request_tree', 'kanban_view_ref': 'pos_neatclover.view_neat_clover_payment_request_kanban'}"
+                              options="{'no_create': True, 'no_open': True}"/>
+                    <field name="payment_method_id"/>
+                    <field name="amount_due"/>
+                    <field name="amount_authorized"/>
+                    <field name="amount_max"/>
                     <field name="amount"/>
                 </group>
                 <div attrs="{'invisible': [('state', '!=', 'processing')]}" class="clover-terminal-processing">
@@ -23,12 +73,17 @@
                 </div>
                 <group attrs="{'invisible': [('state', '!=', 'done')]}">
                     <div class="alert alert-success mb-0" role="alert">
-                        Payment completed successfully. The quotation or invoice has been updated in Odoo.
+                        Operation completed successfully. You may close this window.
                     </div>
                 </group>
                 <footer>
-                    <button string="Pay" name="action_start_payment" type="object" class="btn-primary"
+                    <button string="Charge" name="action_start_charge" type="object" class="btn-primary"
                             attrs="{'invisible': [('state', '!=', 'draft')]}"/>
+                    <button string="Void" name="action_start_void" type="object" class="btn-secondary"
+                            attrs="{'invisible': [('state', '!=', 'draft')]}"/>
+                    <button string="Delete" name="action_delete_preauth" type="object" class="btn-secondary"
+                            attrs="{'invisible': [('state', '!=', 'draft')]}"
+                            confirm="Delete this pre-authorization from Odoo without voiding it on the Clover terminal?"/>
                     <button string="Close" name="action_mark_done" type="object" class="btn-primary"
                             attrs="{'invisible': [('state', '!=', 'done')]}"/>
                     <button string="Cancel" special="cancel" class="btn-secondary"

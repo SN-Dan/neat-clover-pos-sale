@@ -12,7 +12,10 @@ class CloverDocumentController(http.Controller):
 
     _WIZARD_MODELS = {
         'payment': 'clover.terminal.payment.wizard',
+        'preauth': 'clover.terminal.payment.wizard',
         'refund': 'clover.terminal.refund.wizard',
+        'charge': 'clover.terminal.charge.wizard',
+        'void': 'clover.terminal.charge.wizard',
     }
 
     def _get_processing_wizard(self, wizard_id, wizard_type=None):
@@ -47,10 +50,16 @@ class CloverDocumentController(http.Controller):
             return request.not_found()
         payment_method = wizard.payment_method_id
         is_refund = wizard_type == 'refund'
+        operation = wizard_type or 'payment'
+        if wizard_type in ('payment', 'preauth') and getattr(wizard, 'operation', False):
+            operation = wizard.operation
+        elif wizard_type in ('charge', 'void') and getattr(wizard, 'operation', False):
+            operation = 'void' if wizard.operation == 'void' else 'charge'
         return request.render('pos_neatclover_sale.terminal_payment_page', {
             'wizard_id': wizard_id,
             'wizard_type': wizard_type,
             'is_refund': is_refund,
+            'operation': operation,
             'terminal_id': payment_method.neat_clover_terminal_device_code,
             'transaction_id': wizard.transaction_id,
             'payment_method_id': payment_method.id,
