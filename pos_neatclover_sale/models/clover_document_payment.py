@@ -11,7 +11,14 @@ class CloverDocumentPayment(models.AbstractModel):
 
     _TERMINAL_DONE_STATUSES = ('done', 'refunded', 'resent_done', 'resent_refunded')
     _TERMINAL_FAILED_STATUSES = ('failed', 'cancelled')
+    _PREAUTH_SUCCESS_STATUSES = ('authorized',)
+    _VOID_SUCCESS_STATUSES = ('voided',)
+    _OPEN_PREAUTH_STATUSES = ('authorized', 'processed_authorized')
+    _CAPTURE_SUCCESS_STATUSES = (
+        'done', 'resent_done', 'processed_done', 'processed_resent_done',
+    )
     _PROVIDER_CODE = 'neatcloverpos'
+    _PAYMENT_REQUEST_TYPES = ('sale', 'capture')
 
     def assert_document_fully_paid_for_refund(self, sale_order=None, invoice=None):
         """Backend refunds only once the document is fully paid; otherwise use the portal."""
@@ -105,15 +112,78 @@ class CloverDocumentPayment(models.AbstractModel):
         requests = self.env['neat.clover.payment.request'].sudo().search([
             ('order_id', '=', order_id),
             ('is_document_payment', '=', True),
+            ('request_type', 'in', self._PAYMENT_REQUEST_TYPES),
             ('status', 'like', 'processed_done'),
             ('amount', '>', 0),
         ])
         return sum(max(payment.amount - payment.refunded_amt, 0) for payment in requests)
 
+    def get_preauth_captured_cents(self, preauth_request):
+        """Sum of successful capture amounts against a pre-authorization."""
+        if not preauth_request:
+            return 0
+        return preauth_request.get_captured_cents()
+
+    def get_preauth_remaining_cents(self, preauth_request):
+        if not preauth_request:
+            return 0
+        return preauth_request.get_remaining_cents()
+
+    def get_open_preauth_requests(self, order_id=None, partner_id=None):
+        """Open pre-auths for a customer (preferred) or legacy document order_id."""
+        PaymentRequest = self.env['neat.clover.payment.request'].sudo()
+        if partner_id:
+            return PaymentRequest.get_open_preauth_requests(partner_id=partner_id)
+        if not order_id:
+            return PaymentRequest.browse()
+        # Legacy fallback for older preauths created before partner scoping.
+        candidates = PaymentRequest.search([
+            ('order_id', '=', order_id),
+            ('is_document_payment', '=', True),
+            ('request_type', '=', 'preauth'),
+            ('status', 'in', self._OPEN_PREAUTH_STATUSES),
+            ('amount', '>', 0),
+        ], order='start_date asc')
+        return candidates.filtered(lambda r: r.get_remaining_cents() > 0)
+
+    def get_open_preauth_cents(self, order_id=None, partner_id=None):
+        return sum(
+            r.get_remaining_cents()
+            for r in self.get_open_preauth_requests(order_id=order_id, partner_id=partner_id)
+        )
+
+    def get_document_partner(self, sale_order=None, invoice=None):
+        if sale_order:
+            return sale_order.partner_id
+        if invoice:
+            return invoice.partner_id
+        return self.env['res.partner']
+
+    def get_remaining_due_amount(self, sale_order=None, invoice=None):
+        if invoice:
+            return invoice.amount_residual
+        if not sale_order:
+            return 0.0
+        paid_cents = self.get_terminal_paid_cents(self.order_id_for_sale_order(sale_order))
+        paid_amount = float(Decimal(paid_cents) / Decimal('100'))
+        invoices = sale_order.invoice_ids.filtered(
+            lambda m: m.state == 'posted' and m.move_type == 'out_invoice'
+        )
+        if invoices:
+            return sum(invoices.mapped('amount_residual'))
+        return sale_order.amount_total - paid_amount
+
+    def get_preauth_available_amount(self, sale_order=None, invoice=None, order_id=None):
+        remaining = self.get_remaining_due_amount(sale_order=sale_order, invoice=invoice)
+        partner = self.get_document_partner(sale_order=sale_order, invoice=invoice)
+        open_preauth = float(Decimal(self.get_open_preauth_cents(partner_id=partner.id if partner else None)) / Decimal('100'))
+        return remaining - open_preauth
+
     def get_terminal_refundable_amount(self, order_id, terminal_id=None):
         domain = [
             ('order_id', '=', order_id),
             ('is_document_payment', '=', True),
+            ('request_type', 'in', self._PAYMENT_REQUEST_TYPES),
             ('status', 'like', 'processed_done'),
             ('amount', '>', 0),
         ]
@@ -127,6 +197,7 @@ class CloverDocumentPayment(models.AbstractModel):
         paid_requests = self.env['neat.clover.payment.request'].sudo().search([
             ('order_id', '=', order_id),
             ('is_document_payment', '=', True),
+            ('request_type', 'in', self._PAYMENT_REQUEST_TYPES),
             ('status', 'like', 'processed_done'),
             ('amount', '>', 0),
         ], order='start_date asc')
@@ -138,15 +209,26 @@ class CloverDocumentPayment(models.AbstractModel):
         return False
 
     def get_locked_payment_method_for_order(self, order_id):
+        # Lock after first real payment, otherwise after first open/completed preauth.
         paid_requests = self.env['neat.clover.payment.request'].sudo().search([
             ('order_id', '=', order_id),
             ('is_document_payment', '=', True),
+            ('request_type', 'in', self._PAYMENT_REQUEST_TYPES),
             ('status', 'like', 'processed_done'),
             ('amount', '>', 0),
         ], order='start_date asc')
         for paid_request in paid_requests:
             if paid_request.amount - paid_request.refunded_amt > 0:
                 return self._payment_method_for_terminal(paid_request.terminal_id)
+        preauth_requests = self.env['neat.clover.payment.request'].sudo().search([
+            ('order_id', '=', order_id),
+            ('is_document_payment', '=', True),
+            ('request_type', '=', 'preauth'),
+            ('status', 'in', self._OPEN_PREAUTH_STATUSES + ('processed_captured', 'processed_voided')),
+            ('amount', '>', 0),
+        ], order='start_date asc', limit=1)
+        if preauth_requests:
+            return self._payment_method_for_terminal(preauth_requests.terminal_id)
         return False
 
     def commit_refunds_for_order_id(self, order_id, terminal_id=None):
@@ -172,6 +254,11 @@ class CloverDocumentPayment(models.AbstractModel):
 
     def _get_pos_provider(self):
         return self.env['payment.provider'].sudo().search([
+            ('code', '=', self._PROVIDER_CODE),
+        ], limit=1)
+
+    def _get_pos_payment_method_record(self):
+        return self.env['payment.method'].sudo().search([
             ('code', '=', self._PROVIDER_CODE),
         ], limit=1)
 
@@ -253,7 +340,7 @@ class CloverDocumentPayment(models.AbstractModel):
 
     def _run_tx_post_process(self, tx):
         # Default finalize disabled — use register payment flow instead.
-        # tx._finalize_post_processing()
+        # tx._post_process()
         return True
 
     def _register_document_payments(self, invoices, amount=None, provider=None):
@@ -338,7 +425,14 @@ class CloverDocumentPayment(models.AbstractModel):
 
 
     def _mark_wizards_done(self, transaction_id):
-        for model_name in ('clover.terminal.payment.wizard', 'clover.terminal.refund.wizard'):
+        for model_name in (
+            'clover.terminal.payment.wizard',
+            'clover.terminal.refund.wizard',
+            'clover.terminal.preauth.wizard',
+            'clover.terminal.charge.wizard',
+        ):
+            if model_name not in self.env:
+                continue
             wizards = self.env[model_name].sudo().search([
                 ('transaction_id', '=', transaction_id),
                 ('state', '=', 'processing'),
@@ -346,12 +440,134 @@ class CloverDocumentPayment(models.AbstractModel):
             if wizards:
                 wizards.write({'state': 'done'})
 
+    def _post_preauth_note(self, payment_request):
+        order_id = payment_request.order_id
+        model_name, record_id = self.parse_document_order_id(order_id)
+        if not model_name:
+            return
+        record = self.env[model_name].browse(record_id).exists()
+        if not record:
+            return
+        user_name = self._user_name_for_payment_request(payment_request)
+        amount = float(Decimal(payment_request.amount) / Decimal('100'))
+        currency = record.currency_id.name
+        amount_str = f'{amount:.2f} {currency}'
+        body = _(
+            'Clover pre-authorization of %(amount)s completed by %(user)s. '
+            'Transaction: %(transaction)s. This is not a payment.'
+        ) % {
+            'amount': amount_str,
+            'user': user_name,
+            'transaction': payment_request.transaction_id,
+        }
+        record.message_post(body=body, message_type='comment', subtype_xmlid='mail.mt_note')
+
+    def _post_void_preauth_note(self, payment_request, parent_request):
+        order_id = payment_request.order_id
+        model_name, record_id = self.parse_document_order_id(order_id)
+        if not model_name:
+            return
+        record = self.env[model_name].browse(record_id).exists()
+        if not record:
+            return
+        user_name = self._user_name_for_payment_request(payment_request)
+        amount = float(Decimal(parent_request.amount) / Decimal('100'))
+        currency = record.currency_id.name
+        amount_str = f'{amount:.2f} {currency}'
+        body = _(
+            'Clover pre-authorization of %(amount)s voided by %(user)s. '
+            'Original transaction: %(transaction)s.'
+        ) % {
+            'amount': amount_str,
+            'user': user_name,
+            'transaction': parent_request.transaction_id,
+        }
+        record.message_post(body=body, message_type='comment', subtype_xmlid='mail.mt_note')
+
+
+    def _post_delete_preauth_note(self, preauth_request):
+        order_id = preauth_request.order_id
+        model_name, record_id = self.parse_document_order_id(order_id)
+        if not model_name:
+            return
+        record = self.env[model_name].browse(record_id).exists()
+        if not record:
+            return
+        user_name = self.env.user.name
+        amount = float(Decimal(preauth_request.amount) / Decimal('100'))
+        currency = record.currency_id.name
+        amount_str = f'{amount:.2f} {currency}'
+        label = preauth_request.preauth_label or preauth_request.transaction_id
+        body = _(
+            'Clover pre-authorization of %(amount)s deleted by %(user)s '
+            '(not voided on the terminal). Reference: %(label)s. '
+            'Transaction: %(transaction)s.'
+        ) % {
+            'amount': amount_str,
+            'user': user_name,
+            'label': label,
+            'transaction': preauth_request.transaction_id,
+        }
+        record.message_post(body=body, message_type='comment', subtype_xmlid='mail.mt_note')
+
+
+    def _post_capture_note(self, payment_request, parent_request=None):
+        """Log charge details on the document being charged (may differ from the auth document)."""
+        order_id = payment_request.order_id
+        model_name, record_id = self.parse_document_order_id(order_id)
+        if not model_name:
+            return
+        record = self.env[model_name].browse(record_id).exists()
+        if not record:
+            return
+        parent = parent_request or payment_request.parent_request_id
+        user_name = self._user_name_for_payment_request(payment_request)
+        amount = float(Decimal(payment_request.amount) / Decimal('100'))
+        currency = record.currency_id.name
+        amount_str = f'{amount:.2f} {currency}'
+        preauth_tx = parent.transaction_id if parent else payment_request.transaction_id
+        preauth_label = (parent.preauth_label if parent else False) or preauth_tx
+        body = _(
+            'Clover pre-authorization charge of %(amount)s completed by %(user)s. '
+            'Charge transaction: %(charge_tx)s. '
+            'Pre-authorization: %(preauth_label)s (%(preauth_tx)s).'
+        ) % {
+            'amount': amount_str,
+            'user': user_name,
+            'charge_tx': payment_request.transaction_id,
+            'preauth_label': preauth_label,
+            'preauth_tx': preauth_tx,
+        }
+        record.message_post(body=body, message_type='comment', subtype_xmlid='mail.mt_note')
+
     def finalize_document_payment_request(self, payment_request, payment_method=None):
         payment_request.ensure_one()
         if not self.is_quotation_or_invoice_request(payment_request):
             return False
         if payment_request.status.startswith('processed_'):
             return True
+
+        request_type = payment_request.request_type or 'sale'
+
+        if request_type == 'preauth':
+            if payment_request.status not in self._PREAUTH_SUCCESS_STATUSES:
+                return False
+            self._post_preauth_note(payment_request)
+            payment_request.write({'status': 'processed_authorized'})
+            self._mark_wizards_done(payment_request.transaction_id)
+            return True
+
+        if request_type == 'void_preauth':
+            if payment_request.status not in self._VOID_SUCCESS_STATUSES:
+                return False
+            parent = payment_request.parent_request_id
+            if parent and parent.status in self._OPEN_PREAUTH_STATUSES:
+                parent.write({'status': 'processed_voided'})
+            self._post_void_preauth_note(payment_request, parent or payment_request)
+            payment_request.write({'status': 'processed_voided'})
+            self._mark_wizards_done(payment_request.transaction_id)
+            return True
+
         if payment_request.status not in self._TERMINAL_DONE_STATUSES:
             return False
 
@@ -365,6 +581,14 @@ class CloverDocumentPayment(models.AbstractModel):
             payment_method = self._payment_method_for_terminal(payment_request.terminal_id)
 
         self.register_document_payment(payment_request, payment_method)
+        if request_type == 'capture':
+            parent = payment_request.parent_request_id
+            # Always log charge refs on the document being charged.
+            self._post_capture_note(payment_request, parent)
+            if parent and parent.status in self._OPEN_PREAUTH_STATUSES:
+                # One capture per preauth for now: close after first successful charge.
+                # Remaining-amount helpers stay available if we re-enable multi-capture later.
+                parent.write({'status': 'processed_captured'})
         payment_request.write({'status': 'processed_' + payment_request.status})
         self._mark_wizards_done(payment_request.transaction_id)
         return True
@@ -372,19 +596,33 @@ class CloverDocumentPayment(models.AbstractModel):
     def get_document_payment_status(self, payment_request):
         payment_request.ensure_one()
         is_refund = payment_request.amount < 0
+        request_type = payment_request.request_type or 'sale'
         if payment_request.status.startswith('processed_'):
-            if is_refund:
+            if request_type == 'preauth':
+                message = _('Pre-authorization completed successfully. This is not a payment. You may close this window.')
+            elif request_type == 'void_preauth':
+                message = _('Pre-authorization voided successfully. You may close this window.')
+            elif is_refund:
                 message = _('Refund completed successfully. A credit note for the refund has to be created manually. You may close this window.')
+            elif request_type == 'capture':
+                message = _('Charge completed successfully. You may close this window.')
             else:
                 message = _('Payment completed successfully. You may close this window.')
             return {
                 'state': 'done',
                 'success': True,
                 'is_refund': is_refund,
+                'request_type': request_type,
                 'message': message,
             }
         if payment_request.status in self._TERMINAL_FAILED_STATUSES:
-            if is_refund:
+            if request_type == 'preauth':
+                message = _('The pre-authorization was declined or cancelled on the terminal.')
+            elif request_type == 'void_preauth':
+                message = _('The void was declined or cancelled on the terminal.')
+            elif request_type == 'capture':
+                message = _('The charge was declined or cancelled on the terminal.')
+            elif is_refund:
                 message = _('The refund was declined or cancelled on the terminal.')
             else:
                 message = _('The payment was declined or cancelled on the terminal.')
@@ -392,16 +630,28 @@ class CloverDocumentPayment(models.AbstractModel):
                 'state': 'error',
                 'success': False,
                 'is_refund': is_refund,
+                'request_type': request_type,
                 'message': message,
             }
-        if payment_request.status in self._TERMINAL_DONE_STATUSES:
+        if (
+            payment_request.status in self._TERMINAL_DONE_STATUSES
+            or payment_request.status in self._PREAUTH_SUCCESS_STATUSES
+            or payment_request.status in self._VOID_SUCCESS_STATUSES
+        ):
             return {
                 'state': 'processing',
                 'success': False,
                 'is_refund': is_refund,
+                'request_type': request_type,
                 'message': _('Confirming with Odoo...'),
             }
-        if is_refund:
+        if request_type == 'preauth':
+            message = _('Waiting for pre-authorization on the Clover terminal...')
+        elif request_type == 'void_preauth':
+            message = _('Waiting for void on the Clover terminal...')
+        elif request_type == 'capture':
+            message = _('Waiting for charge on the Clover terminal...')
+        elif is_refund:
             message = _('Waiting for the refund on the Clover terminal...')
         else:
             message = _('Waiting for payment on the Clover terminal...')
@@ -409,6 +659,7 @@ class CloverDocumentPayment(models.AbstractModel):
             'state': 'waiting',
             'success': False,
             'is_refund': is_refund,
+            'request_type': request_type,
             'message': message,
         }
 

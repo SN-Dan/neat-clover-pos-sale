@@ -3,7 +3,8 @@
     <template id="terminal_payment_page" name="Clover Terminal Payment Page">
         <t t-call="web.html_container">
             <div id="clover-terminal-root"
-                 t-att-data-is-refund="'1' if is_refund else '0'"/>
+                 t-att-data-is-refund="'1' if is_refund else '0'"
+                 t-att-data-operation="operation or ('refund' if is_refund else 'payment')"/>
             <style>
                 html, body, #clover-terminal-root {
                     margin: 0;
@@ -90,11 +91,23 @@
                 .waiting-wrap.hidden { display: none; }
             </style>
             <div class="terminal-wrap waiting-wrap" id="cloverWaitingWrap">
-                <h2 t-if="is_refund">Refund by Clover Terminal</h2>
+                <h2 t-if="operation == 'refund' or is_refund">Refund by Clover Terminal</h2>
+                <h2 t-elif="operation == 'preauth'">Pre-Authorize by Clover Terminal</h2>
+                <h2 t-elif="operation == 'charge'">Charge Pre-Authorization</h2>
+                <h2 t-elif="operation == 'void'">Void Pre-Authorization</h2>
                 <h2 t-else="">Pay by Clover Terminal</h2>
-                <p t-attf-class="notice#{ ' refund' if is_refund else '' }">
-                    <t t-if="is_refund">
+                <p t-attf-class="notice#{ ' refund' if (operation == 'refund' or is_refund) else '' }">
+                    <t t-if="operation == 'refund' or is_refund">
                         Complete the refund on the Clover terminal. This screen updates automatically when the refund finishes.
+                    </t>
+                    <t t-elif="operation == 'preauth'">
+                        Complete the pre-authorization on the Clover terminal. This is not a payment.
+                    </t>
+                    <t t-elif="operation == 'charge'">
+                        Complete the charge on the Clover terminal. This screen updates automatically when the charge finishes.
+                    </t>
+                    <t t-elif="operation == 'void'">
+                        Complete the void on the Clover terminal. This screen updates automatically when the void finishes.
                     </t>
                     <t t-else="">
                         Complete the payment on the Clover terminal. This screen updates automatically when payment finishes.
@@ -103,7 +116,10 @@
                 <div class="status-box">
                     <div class="spinner" id="cloverSpinner"></div>
                     <p class="status-text" id="clover-terminal-status">
-                        <t t-if="is_refund">Waiting for refund on the terminal...</t>
+                        <t t-if="operation == 'refund' or is_refund">Waiting for refund on the terminal...</t>
+                        <t t-elif="operation == 'preauth'">Waiting for pre-authorization on the terminal...</t>
+                        <t t-elif="operation == 'charge'">Waiting for charge on the terminal...</t>
+                        <t t-elif="operation == 'void'">Waiting for void on the terminal...</t>
                         <t t-else="">Waiting for payment on the terminal...</t>
                     </p>
                 </div>
@@ -120,6 +136,7 @@
                     const wizardType = "<t t-esc='wizard_type'/>";
                     const paymentMethodId = <t t-esc='payment_method_id'/>;
                     const isRefund = "<t t-esc='is_refund'/>" === "True";
+                    const operation = "<t t-esc='operation'/>" || (isRefund ? "refund" : "payment");
                     const isDesktopMode = <t t-if="is_desktop_mode">true</t><t t-else="">false</t>;
                     const isLocalWsServer = <t t-if="is_local_ws_server">true</t><t t-else="">false</t>;
                     const isMobileConfig = <t t-if="is_mobile">true</t><t t-else="">false</t>;
@@ -240,22 +257,54 @@
                         } catch (error) {}
                     }
 
+                    function operationLabels(success) {
+                        const labels = {
+                            refund: {
+                                okTitle: 'Refund successful',
+                                errTitle: 'Refund declined',
+                                okMsg: 'The refund was processed successfully. You may close this window.',
+                                errMsg: 'The refund was declined or cancelled. Please try again.',
+                                expired: 'Refund request expired or was not found.',
+                            },
+                            preauth: {
+                                okTitle: 'Pre-authorization successful',
+                                errTitle: 'Pre-authorization declined',
+                                okMsg: 'The pre-authorization was processed successfully. This is not a payment.',
+                                errMsg: 'The pre-authorization was declined or cancelled. Please try again.',
+                                expired: 'Pre-authorization request expired or was not found.',
+                            },
+                            charge: {
+                                okTitle: 'Charge successful',
+                                errTitle: 'Charge declined',
+                                okMsg: 'The charge was processed successfully. You may close this window.',
+                                errMsg: 'The charge was declined or cancelled. Please try again.',
+                                expired: 'Charge request expired or was not found.',
+                            },
+                            void: {
+                                okTitle: 'Void successful',
+                                errTitle: 'Void declined',
+                                okMsg: 'The pre-authorization was voided successfully. You may close this window.',
+                                errMsg: 'The void was declined or cancelled. Please try again.',
+                                expired: 'Void request expired or was not found.',
+                            },
+                            payment: {
+                                okTitle: 'Payment successful',
+                                errTitle: 'Payment declined',
+                                okMsg: 'The payment was processed successfully. You may close this window.',
+                                errMsg: 'The payment was declined or cancelled. Please try again.',
+                                expired: 'Payment request expired or was not found.',
+                            },
+                        };
+                        return labels[operation] || labels.payment;
+                    }
+
                     function showResult(success, message) {
+                        const labels = operationLabels(success);
                         waitingWrap.classList.add('hidden');
                         resultWrap.classList.add('show');
-                        resultTitle.textContent = success
-                            ? (isRefund ? 'Refund successful' : 'Payment successful')
-                            : (isRefund ? 'Refund declined' : 'Payment declined');
+                        resultTitle.textContent = success ? labels.okTitle : labels.errTitle;
                         resultTitle.className = 'result-title ' + (success ? 'ok' : 'err');
-                        resultMessage.textContent = message || (
-                            success
-                                ? (isRefund
-                                    ? 'The refund was processed successfully. You may close this window.'
-                                    : 'The payment was processed successfully. You may close this window.')
-                                : (isRefund
-                                    ? 'The refund was declined or cancelled. Please try again.'
-                                    : 'The payment was declined or cancelled. Please try again.')
-                        );
+                        resultMessage.textContent = message || (success ? labels.okMsg : labels.errMsg);
                         expandWizardContainers();
                         const frame = window.frameElement;
                         if (frame) {
@@ -369,9 +418,7 @@
                                     statusEl.textContent = res.data.message;
                                     spinnerEl.classList.toggle('hidden', res.data.state !== 'waiting' &amp;&amp; res.data.state !== 'processing');
                                 } else {
-                                    statusEl.textContent = isRefund
-                                        ? 'Refund request expired or was not found.'
-                                        : 'Payment request expired or was not found.';
+                                    statusEl.textContent = operationLabels(false).expired;
                                     showResult(false, statusEl.textContent);
                                     return;
                                 }
